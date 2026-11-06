@@ -1,0 +1,15 @@
+../Core/Src/AK10_9_MIT_CAN_TX.c:5:12:feedback_is_fresh	4
+../Core/Src/AK10_9_MIT_CAN_TX.c:11:12:is_safe_input	6
+../Core/Src/AK10_9_MIT_CAN_TX.c:18:12:within	4
+../Core/Src/AK10_9_MIT_CAN_TX.c:23:12:allowed_command	12
+../Core/Src/AK10_9_MIT_CAN_TX.c:35:13:request_inhibit	3
+../Core/Src/AK10_9_MIT_CAN_TX.c:44:13:enter_stop	2
+../Core/Src/AK10_9_MIT_CAN_TX.c:56:6:AK10_9_TX_Init	2
+../Core/Src/AK10_9_MIT_CAN_TX.c:64:5:AK10_9_TX_Arm	6
+../Core/Src/AK10_9_MIT_CAN_TX.c:78:5:AK10_9_TX_SetCommand	4
+../Core/Src/AK10_9_MIT_CAN_TX.c:92:6:AK10_9_TX_RequestStop	2
+../Core/Src/AK10_9_MIT_CAN_TX.c:97:6:AK10_9_TX_OnDisableAck	1
+../Core/Src/AK10_9_MIT_CAN_TX.c:114:6:AK10_9_TX_Step	16
+../Core/Src/AK10_9_MIT_CAN_TX.c:193:5:AK10_9_TX_ManualReset	8
+../Core/Src/AK10_9_MIT_CAN_TX.c:205:13:AK10_9_TX_StateName	5
+../Core/Src/AK10_9_MIT_CAN_TX.c:216:13:AK10_9_TX_FaultName	11

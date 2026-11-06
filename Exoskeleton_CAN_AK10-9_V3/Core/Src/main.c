@@ -24,6 +24,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "AK10_9_MIT.h"
+#include "AK10_9_MIT_CAN_TX.h"
+#include "AK10_9_MIT_CAN_HAL.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -77,6 +79,11 @@ UART_HandleTypeDef huart2;
 /* Updated by CAN RX interrupt, copied in main() with IRQs briefly masked. */
 static volatile AK_Feedback ak_rx = {0};
 static uint32_t ak_start_ms = 0U;
+/* Motor command TX controller. Intentionally never armed in this demo. */
+static AK10_9_MIT_CAN_TX ak_tx_ctrl;
+static volatile uint8_t ak_disable_ack_received = 0U;
+/* This flag is a SOFTWARE REQUEST only, NOT a connected safety output. */
+static volatile uint8_t ak_external_inhibit_requested = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,6 +97,7 @@ static void AK_FormatFixed(char *dst, size_t dst_cap, int32_t value, uint32_t sc
 static void AK_UartLine(const char *message);
 static AK_LinkState AK_GetLinkState(const AK_Feedback *fb, uint32_t now_ms);
 static const char *AK_FaultName(uint8_t fault);
+static void AK_RequestInhibit(void *user);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -157,6 +165,13 @@ static const char *AK_FaultName(uint8_t fault)
     case 7U: return "MOTOR_STALL";
     default: return "OTHER_CODE";
   }
+}
+/* This callback deliberately has no actual motor-power cutoff circuitry.
+ * A separate safety-rated disable mechanism must be implemented and tested. */
+static void AK_RequestInhibit(void *user)
+{
+  (void)user;
+  ak_external_inhibit_requested = 1U;
 }
 /* USER CODE END 0 */
 
@@ -229,6 +244,7 @@ int main(void)
     AK_UartLine("ERROR: RX0 notification failed\r\n");
     Error_Handler();
   }
+  AK10_9_TX_Init(&ak_tx_ctrl);
   ak_start_ms = HAL_GetTick();
   AK_UartLine("AK10-9 CAN FEEDBACK MONITOR START\r\n");
   AK_UartLine("CAN EXT=0x2968 rate=1Mbps feedback=50Hz timeout=200ms TX=DISABLED\r\n");
@@ -290,6 +306,30 @@ int main(void)
     uint32_t now_ms = HAL_GetTick();
 
     AK_LinkState state = AK_GetLinkState(&fb, now_ms);
+
+    /* Fail-closed, preview-only: physical_enable_ok is intentionally FALSE.
+       No serial command, automatic ARM, or HAL CAN TX exists in this example.
+       To use the API later, connect a real independent safety interlock and
+       invoke AK10_9_TX_Arm() only on a deliberate operator action. */
+    AK10_9_TX_Inputs tx_inputs = {0};
+    tx_inputs.now_ms = now_ms;
+    tx_inputs.feedback_last_ms = fb.last_rx_ms;
+    tx_inputs.feedback_frames = fb.received;
+    tx_inputs.drive_fault = fb.fault_code;
+    tx_inputs.physical_enable_ok = 0U; /* FAIL-CLOSED, not a hardware signal */
+    tx_inputs.emergency_stop = 0U;
+    tx_inputs.can_error = (((CAN1->ESR & CAN_ESR_BOFF) != 0U) ||
+                           (HAL_CAN_GetError(&hcan1) != HAL_CAN_ERROR_NONE)) ? 1U : 0U;
+    AK10_9_TX_Step(&ak_tx_ctrl, &tx_inputs, AK10_9_TX_HAL_QueueFrame,
+                   AK_RequestInhibit, &hcan1);
+    if (ak_disable_ack_received != 0U)
+    {
+      uint32_t pm = __get_PRIMASK();
+      __disable_irq();
+      ak_disable_ack_received = 0U;
+      if (pm == 0U) { __enable_irq(); }
+      AK10_9_TX_OnDisableAck(&ak_tx_ctrl);
+    }
     static int32_t previous_state = -1;
     static int32_t previous_fault = -1;
     static uint32_t last_report_ms = 0U;
@@ -323,6 +363,22 @@ int main(void)
     else
     {
       previous_fault = -1; /* never label stale fault state as live */
+    }
+
+    /* Print this controller status without taking CAN interrupts hostage. */
+    static uint32_t last_txctrl_report = 0U;
+    if ((uint32_t)(now_ms - last_txctrl_report) >= 2000U)
+    {
+      last_txctrl_report = now_ms;
+      (void)snprintf(line, sizeof(line),
+        "TXCTRL state=%s fault=%s HW_TX=%s accepted=%lu preview=%lu inhibit_req=%u\r\n",
+        AK10_9_TX_StateName(ak_tx_ctrl.state),
+        AK10_9_TX_FaultName(ak_tx_ctrl.fault),
+        AK10_9_TX_ENABLE ? "ENABLED" : "DISABLED",
+        (unsigned long)ak_tx_ctrl.accepted_tx_count,
+        (unsigned long)ak_tx_ctrl.preview_count,
+        (unsigned int)ak_external_inhibit_requested);
+      AK_UartLine(line);
     }
 
     if ((uint32_t)(now_ms - last_report_ms) >= AK_STATUS_PRINT_MS)
@@ -544,6 +600,13 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         header.ExtId != AK_CAN_FEEDBACK_ID || header.DLC != AK_CAN_EXPECTED_DLC)
     {
       ak_rx.rejected++;
+      continue;
+    }
+    if (data[7] == 0x77U)
+    {
+      /* Newer V3.2 firmware: single disable confirmation, not drive fault 119.
+         Host loop decides whether an actual stop was pending. */
+      ak_disable_ack_received = 1U;
       continue;
     }
     ak_rx.position_x10 = AK_ReadI16BE(&data[0]);
